@@ -31,12 +31,15 @@ Server exited: ...
 | 基底 | `debian:trixie-slim`。KasmVNC deb 必须与发行版匹配（用 `kasmvncserver_trixie_1.5.0_arm64.deb`）；adb 34.0.5（bookworm 只有 29.0.6）；ffmpeg 7.1 |
 | 渲染 | Xvnc 没有 GLX，固定 `--render-driver=software` |
 | 编译开关 | 关掉 v4l2 / USB(OTG)，设备是 TCP 接入，用不上，还能少一个 libusb 运行期依赖 |
+| 网页鉴权 | **默认关闭**（`-DisableBasicAuth 1`），访问控制交给前面的 Cloudflare Access / ingress 白名单 |
+| 鼠标光标 | 必须装 Xcursor 主题，否则浏览器里完全看不到指针，见下 |
 
 ## 环境变量
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `VNC_USER` / `VNC_PW` | `scrcpy` / `scrcpy` | KasmVNC basic auth，线上从 k8s secret 注入 |
+| `KASM_BASIC_AUTH` | `0` | `0` = 打开页面不需要登录（给 vncserver 加官方参数 `-DisableBasicAuth 1`）；`1` = 恢复用户名/密码框 |
+| `VNC_USER` / `VNC_PW` | `scrcpy` / 随机 | 只在 `KASM_BASIC_AUTH=1` 时有意义。**即使关掉鉴权也会生成密码文件**——vncserver 找不到密码文件会走交互式设置流程，容器里没有 tty 会直接失败 |
 | `KASM_PORT` | `3001` | web 端口（明文 HTTP，TLS 由 ingress 终结） |
 | `SCREEN_GEOMETRY` | `720x1280` | X 桌面分辨率，建议对齐设备分辨率做 1:1 |
 | `ADB_SERIAL` | `redroid.redroid.svc.cluster.local:5555` | 一定用 Service DNS 名，Pod 重建后能自愈 |
@@ -66,6 +69,44 @@ Server exited: ...
 浏览器那一段（浏览器 ↔ KasmVNC）依赖浏览器的异步剪贴板 API，需要 **HTTPS（secure context）**
 并允许剪贴板权限；用 `http://<clusterip>:3001` 直连时浏览器会禁用该 API，只能用 KasmVNC 侧边栏的
 剪贴板面板手工贴。
+
+## 鼠标光标
+
+`debian:trixie-slim` 里 `/usr/share/icons` **根本不存在**，一个 Xcursor 主题都没有，结果是浏览器里
+完全看不到鼠标指针。SDL2 建系统光标的顺序（`src/video/x11/SDL_x11mouse.c`）是：
+
+```
+XcursorLibraryLoadCursor(dpy, "default")   ← 没主题就返回 None
+  → 失败才退回 XCreateFontCursor(核心 cursor 字体)
+```
+
+修法（都在 Dockerfile 里）：装 `xcursor-themes`，并补两样东西，否则装了也白装：
+
+1. `xcursor-themes` 里**没有名为 `default` 的光标文件**（只有 `left_ptr` / `arrow`），而 SDL 传的是
+   freedesktop 的 CSS 名 `default` → 补 `default -> left_ptr` 软链；
+2. libXcursor 默认找名为 `default` 的**主题目录** → 补 `/usr/share/icons/default/index.theme`
+   （`Inherits=whiteglass`）。
+
+另外 `xstartup` 里加了 `xsetroot -cursor_name left_ptr`，把根窗口光标也设上做兜底。
+
+### 怎么验证光标真的可见
+
+xwd / import 截图**不含指针**，所以镜像里带了一个 30 行的小工具 `cursorprobe`，用 XFIXES 的
+`XFixesGetCursorImage()` 取"当前正在显示的那个光标"的 ARGB 位图并数非透明像素：
+
+```
+$ DISPLAY=:1 xdotool mousemove 360 640 && cursorprobe
+cursor at (360,640) size=24x24 hotspot=(2,2) pixels=576 opaque=260 -> VISIBLE
+```
+
+`24x24 / hotspot=(2,2)` 正好等于 `whiteglass/cursors/left_ptr` 里 size-24 那一帧的头部，
+说明拿到的确实是装进来的主题光标（而不是别的兜底路径）。
+
+### `--mouse=uhid` 不可行
+
+scrcpy 的 `--mouse=uhid` 能让 Android 自己渲染指针，但它要求设备侧能打开 `/dev/uhid`。
+redroid 上是 `crw------- root:root`，而 scrcpy server 跑在 adb shell（uid 2000）下，`test -r` 直接
+EACCES。所以这条路走不通，维持默认的 `--mouse=sdk` + 本地 X 光标。
 
 ## 已验证（redroid Android 14 arm64）
 
