@@ -70,7 +70,8 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends \
       ca-certificates curl git \
       gcc pkgconf meson ninja-build \
-      libsdl2-dev libavcodec-dev libavdevice-dev libavformat-dev libavutil-dev libswresample-dev; \
+      libsdl2-dev libavcodec-dev libavdevice-dev libavformat-dev libavutil-dev libswresample-dev \
+      libx11-dev libxfixes-dev; \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -90,6 +91,12 @@ RUN set -eux; \
     DESTDIR=/out ninja -C build install; \
     find /out -type f | sort
 
+# cursorprobe: 30 行的小工具, 用 XFIXES 取"当前正在显示的光标"位图并统计非透明像素。
+# 存在的理由: xwd/import 截图不含指针, 排查"没有鼠标光标"只能靠这个。运行期库 libXfixes.so.3
+# 本来就被 KasmVNC/xdotool 拉进来了, 所以只在构建阶段多装一个 libxfixes-dev。
+COPY tools/cursorprobe.c /tmp/cursorprobe.c
+RUN gcc -O2 -Wall -o /out/usr/local/bin/cursorprobe /tmp/cursorprobe.c -lX11 -lXfixes
+
 # ---------------------------------------------------------------- 运行阶段
 FROM debian:trixie-slim
 ARG SCRCPY_VERSION
@@ -103,6 +110,7 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends \
       ca-certificates curl tini procps dbus-x11 ssl-cert jq \
       x11-utils x11-xserver-utils x11-apps netpbm \
+      xcursor-themes \
       xdotool xclip \
       fonts-dejavu fonts-noto-cjk \
       adb \
@@ -114,7 +122,28 @@ RUN set -eux; \
     apt-get clean; rm -rf /var/lib/apt/lists/*; \
     adb version
 
-# scrcpy 客户端 + /usr/local/share/scrcpy/scrcpy-server
+# ---- 鼠标光标 ----
+# 坑: debian:trixie-slim 里 /usr/share/icons 根本不存在, 一个 Xcursor 主题都没有。
+# SDL2 建系统光标的顺序是(见 SDL 的 src/video/x11/SDL_x11mouse.c):
+#   XcursorLibraryLoadCursor(dpy, "default")  ->  失败才退回 XCreateFontCursor(核心 cursor 字体)
+# 装上 xcursor-themes 让第一步能成功, 拿到的是带 alpha 的 ARGB 光标, KasmVNC 通过
+# RFB 的 cursor 伪编码发给浏览器渲染, 效果最好。
+# 注意两个细节:
+#   1) xcursor-themes 里**没有名为 `default` 的光标文件**(只有 left_ptr/arrow), 而 SDL 传的是
+#      freedesktop 的 CSS 名 "default", 所以必须自己补一个 default -> left_ptr 的软链, 否则白装。
+#   2) libXcursor 找主题时默认找名为 "default" 的主题目录, 所以再补一个
+#      /usr/share/icons/default/index.theme 指向 whiteglass。
+RUN set -eux; \
+    for t in whiteglass redglass handhelds; do \
+      [ -d "/usr/share/icons/$t/cursors" ] || continue; \
+      ln -sf left_ptr "/usr/share/icons/$t/cursors/default"; \
+    done; \
+    install -d /usr/share/icons/default; \
+    printf '[Icon Theme]\nName=Default\nComment=Default cursor theme\nInherits=whiteglass\n' \
+      > /usr/share/icons/default/index.theme; \
+    ls -l /usr/share/icons/whiteglass/cursors/default
+
+# scrcpy 客户端 + /usr/local/share/scrcpy/scrcpy-server + cursorprobe
 COPY --from=scrcpy-build /out/usr/local /usr/local
 RUN ldconfig && scrcpy --version
 

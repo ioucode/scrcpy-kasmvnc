@@ -3,8 +3,17 @@
 # 参考自 ioucode/chrome-kasmvnc 的 start.sh(同一套 KasmVNC 用法), 把 Chrome 换成 scrcpy。
 set -uo pipefail
 
-: "${VNC_USER:=scrcpy}"            # KasmVNC basic-auth 用户名
-: "${VNC_PW:=scrcpy}"              # KasmVNC basic-auth 密码(线上从 k8s secret 注入)
+# --- 网页鉴权 ---
+# KASM_BASIC_AUTH=0(默认): 给 vncserver 加 -DisableBasicAuth 1, 打开页面不弹用户名/密码框。
+#   线上前面有 Cloudflare Access + ingress 的 CF 回源网段白名单兜底, 所以不是裸奔。
+#   想改回来就把这个变量设成 1(不需要重新构建镜像)。
+# 注意: 这里**不是**"设个空密码"—— KasmVNC 用空密码要么起不来要么照样弹框, 必须用官方的
+#       Xvnc 参数 DisableBasicAuth("Disable basic auth for websockets", 见 Xvnc -help)。
+: "${KASM_BASIC_AUTH:=0}"
+: "${VNC_USER:=scrcpy}"
+# 即使关了 basic auth 也要生成一份密码文件: vncserver 找不到密码文件会走交互式设置流程,
+# 容器里没有 tty 会直接失败。没显式给 VNC_PW 时随机生成一个(谁也不需要知道它)。
+: "${VNC_PW:=$(head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9')}"
 : "${KASM_PORT:=3001}"             # KasmVNC web 端口(TLS 由 ingress 终结, 这里跑明文)
 : "${SCREEN_GEOMETRY:=720x1280}"   # X 桌面分辨率, 默认对齐 redroid 的 720x1280, 1:1 不缩放
 : "${ADB_SERIAL:=redroid.redroid.svc.cluster.local:5555}"
@@ -41,7 +50,6 @@ adb start-server 2>&1 | sed 's/^/[adb] /'
 echo "[start] adb auto-connect loop -> ${ADB_SERIAL} (every ${ADB_CONNECT_INTERVAL}s)"
 
 # ---------------------------------------------------------------- KasmVNC 配置
-# basic auth 打开(密码来自 VNC_PW), 与 chrome-kasmvnc 不同 —— 那边前面有 Cloudflare Access 兜底。
 printf '%s\n%s\n' "$VNC_PW" "$VNC_PW" | vncpasswd -u "$VNC_USER" -w -r || true
 
 GEO_W="${SCREEN_GEOMETRY%x*}"; GEO_H="${SCREEN_GEOMETRY#*x}"
@@ -88,6 +96,9 @@ cat > /config/.vnc/xstartup <<'XEOF'
 # vncserver 会在 :1 上执行本脚本, 环境变量从 start.sh 继承过来。
 export DISPLAY="${DISPLAY:-:1}"
 xsetroot -solid black 2>/dev/null || true
+# 根窗口光标: 没有 WM 也没人设过根光标时, 根窗口的 cursor 是 None; 子窗口如果没自己定义
+# 光标就会继承到 None -> 浏览器里看不到鼠标。显式设成 left_ptr 兜底。
+xsetroot -cursor_name left_ptr 2>/dev/null || true
 exec /opt/scrcpy/scrcpy-loop.sh >>/config/.vnc/scrcpy.log 2>&1
 XEOF
 chmod +x /config/.vnc/xstartup
@@ -102,8 +113,16 @@ rm -f /config/.vnc/*.pid /config/.vnc/*:1.log 2>/dev/null || true
 term() { echo "[start] SIGTERM -> stopping"; vncserver -kill "$DISP" >/dev/null 2>&1 || true; exit 0; }
 trap term TERM INT
 
+VNC_ARGS=(-geometry "$SCREEN_GEOMETRY" -depth 24 -select-de manual)
+if [ "$KASM_BASIC_AUTH" = "1" ]; then
+  echo "[start] web basic auth: ENABLED (user ${VNC_USER})"
+else
+  echo "[start] web basic auth: DISABLED (-DisableBasicAuth 1)"
+  VNC_ARGS+=(-DisableBasicAuth 1)
+fi
+
 echo "[start] starting KasmVNC on ${DISP} (web ${KASM_PORT}, geom ${SCREEN_GEOMETRY}, device ${ADB_SERIAL})"
-vncserver "$DISP" -geometry "$SCREEN_GEOMETRY" -depth 24 -select-de manual
+vncserver "$DISP" "${VNC_ARGS[@]}"
 
 # PID1 挂在日志上; wait 让 trap 能生效
 tail -F /config/.vnc/scrcpy.log 2>/dev/null &
