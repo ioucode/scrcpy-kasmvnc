@@ -17,8 +17,9 @@ set -uo pipefail
 export HOME=/config
 export ADB_SERIAL ADB_CONNECT_INTERVAL SCREEN_GEOMETRY \
        SCRCPY_MAX_FPS SCRCPY_VIDEO_BIT_RATE SCRCPY_MAX_SIZE SCRCPY_EXTRA_ARGS
-# adb server 就在本容器里, scrcpy 通过它跟 redroid 说话
-export ADB_SERVER_SOCKET="tcp:127.0.0.1:5037"
+# 坑: **千万别设 ADB_SERVER_SOCKET**。一旦设成 tcp:127.0.0.1:5037, adb 就把它当"远端 server",
+#     `adb start-server` / `adb connect` 都不会再 fork 出本地 daemon, 于是设备永远连不上,
+#     scrcpy-loop 会一直卡在 "waiting for ..."。默认值本来就是本地 5037, 保持不设即可。
 # SDL 在 Xvnc 上没有 GLX, 固定走软件渲染; WM_CLASS 固定成 scrcpy 方便 fluxbox/xdotool 精确匹配
 export SDL_VIDEODRIVER=x11 SDL_VIDEO_X11_WMCLASS=scrcpy
 
@@ -30,7 +31,7 @@ echo "[start] $(adb version | head -1)"
 # ---------------------------------------------------------------- adb
 # redroid 是 TCP 设备, 不会自己出现在设备列表里, 必须 adb connect。
 # redroid Pod 重建后 PodIP 会变, 所以一律用 Service DNS 名并循环重连(兼做自愈)。
-adb start-server >/dev/null 2>&1
+adb start-server 2>&1 | sed 's/^/[adb] /'
 (
   while true; do
     adb connect "${ADB_SERIAL}" >/dev/null 2>&1 || true
@@ -89,7 +90,11 @@ session.screen0.toolbar.visible:	false
 session.screen0.rootCommand:	xsetroot -solid black
 session.screen0.focusModel:	ClickToFocus
 session.screen0.focusNewWindows:	true
+session.styleOverlay:	/config/.fluxbox/overlay
 FBINIT
+# 光设 rootCommand 还不够: 样式里带 background 时 fluxbox 照样会去调 fbsetbg。
+# 官方做法是在 style overlay 里写 `background: none` 彻底禁掉设壁纸这一步。
+printf 'background: none\n' > /config/.fluxbox/overlay
 
 # ---------------------------------------------------------------- xstartup
 cat > /config/.vnc/xstartup <<'XEOF'
