@@ -13,13 +13,10 @@ set -uo pipefail
 : "${SCRCPY_VIDEO_BIT_RATE:=4M}"
 : "${SCRCPY_MAX_SIZE:=0}"          # 0 = 不缩放
 : "${SCRCPY_EXTRA_ARGS:=}"
-: "${AUTO_PUSH_CLIPBOARD:=1}"      # 1 = 自动把 X 剪贴板推给 Android(见 clipboard-push.sh)
-: "${CLIPBOARD_POLL_INTERVAL:=1}"
 
 export HOME=/config
 export ADB_SERIAL ADB_CONNECT_INTERVAL SCREEN_GEOMETRY \
-       SCRCPY_MAX_FPS SCRCPY_VIDEO_BIT_RATE SCRCPY_MAX_SIZE SCRCPY_EXTRA_ARGS \
-       AUTO_PUSH_CLIPBOARD CLIPBOARD_POLL_INTERVAL
+       SCRCPY_MAX_FPS SCRCPY_VIDEO_BIT_RATE SCRCPY_MAX_SIZE SCRCPY_EXTRA_ARGS
 # adb server 就在本容器里, scrcpy 通过它跟 redroid 说话
 export ADB_SERVER_SOCKET="tcp:127.0.0.1:5037"
 # SDL 在 Xvnc 上没有 GLX, 固定走软件渲染; WM_CLASS 固定成 scrcpy 方便 fluxbox/xdotool 精确匹配
@@ -83,20 +80,24 @@ cat > /config/.fluxbox/apps <<'APPS'
   [Position]      {0 0}
 [end]
 APPS
-touch /config/.fluxbox/init
-if grep -q '^session.screen0.toolbar.visible:' /config/.fluxbox/init; then
-  sed -i 's/^session.screen0.toolbar.visible:.*/session.screen0.toolbar.visible:\tfalse/' /config/.fluxbox/init
-else
-  printf 'session.screen0.toolbar.visible:\tfalse\n' >> /config/.fluxbox/init
-fi
+# init: 隐藏工具栏 + 用 xsetroot 画纯色背景。
+# 坑: 不设 rootCommand 的话 fluxbox 会去调 fbsetbg 设壁纸, 找不到壁纸程序就弹一个
+#     xmessage 窗口("fbsetbg: I can't find an app to set the wallpaper with")挡在桌面上,
+#     还会抢焦点, 影响 scrcpy 收快捷键。
+cat > /config/.fluxbox/init <<'FBINIT'
+session.screen0.toolbar.visible:	false
+session.screen0.rootCommand:	xsetroot -solid black
+session.screen0.focusModel:	ClickToFocus
+session.screen0.focusNewWindows:	true
+FBINIT
 
 # ---------------------------------------------------------------- xstartup
 cat > /config/.vnc/xstartup <<'XEOF'
 #!/bin/bash
 # vncserver 会在 :1 上执行本脚本, 环境变量从 start.sh 继承过来。
 export DISPLAY="${DISPLAY:-:1}"
+xsetroot -solid black 2>/dev/null || true
 fluxbox >/config/.vnc/fluxbox.log 2>&1 &
-[ "${AUTO_PUSH_CLIPBOARD}" = "1" ] && /opt/scrcpy/clipboard-push.sh >>/config/.vnc/clipboard.log 2>&1 &
 exec /opt/scrcpy/scrcpy-loop.sh >>/config/.vnc/scrcpy.log 2>&1
 XEOF
 chmod +x /config/.vnc/xstartup
@@ -115,5 +116,5 @@ echo "[start] starting KasmVNC on ${DISP} (web ${KASM_PORT}, geom ${SCREEN_GEOME
 vncserver "$DISP" -geometry "$SCREEN_GEOMETRY" -depth 24 -select-de manual
 
 # PID1 挂在日志上; wait 让 trap 能生效
-tail -F /config/.vnc/scrcpy.log /config/.vnc/clipboard.log /config/.vnc/*.log 2>/dev/null &
+tail -F /config/.vnc/scrcpy.log 2>/dev/null &
 wait

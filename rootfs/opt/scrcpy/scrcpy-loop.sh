@@ -38,7 +38,8 @@ while true; do
   # --render-driver=software : Xvnc 没有 GLX, 必须软件渲染
   # --no-audio               : redroid 没有音频设备, 开着只会反复报错并浪费 CPU
   # --window-borderless      : 配合 fluxbox 的 apps 规则铺满桌面
-  # 剪贴板同步是默认开启的(--clipboard-autosync), 不要加 --no-clipboard-autosync
+  # 剪贴板: Android -> 电脑 由 --clipboard-autosync 默认开启, 不要加 --no-clipboard-autosync;
+  #         电脑 -> Android 由用户在画面里按 Alt+V 触发(scrcpy 3.x 没有自动推送的选项)
   scrcpy \
     --serial="${ADB_SERIAL}" \
     --no-audio \

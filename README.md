@@ -42,15 +42,39 @@ Server exited: ...
 | `ADB_SERIAL` | `redroid.redroid.svc.cluster.local:5555` | 一定用 Service DNS 名，Pod 重建后能自愈 |
 | `SCRCPY_MAX_FPS` / `SCRCPY_VIDEO_BIT_RATE` / `SCRCPY_MAX_SIZE` | `30` / `4M` / `0` | 限流，控制 CPU |
 | `SCRCPY_EXTRA_ARGS` | 空 | 追加给 scrcpy 的参数 |
-| `AUTO_PUSH_CLIPBOARD` | `1` | 自动把 X 剪贴板推给 Android，见下 |
 
 ## 剪贴板
 
-- **Android → 浏览器**：scrcpy 默认开启 `--clipboard-autosync`，设备剪贴板一变就写进 X 的 `CLIPBOARD`，
-  KasmVNC 再同步到浏览器。全自动。
-- **浏览器 → Android**：scrcpy 上游只给了快捷键 `Alt+v`（设置设备剪贴板并粘贴）/ `Alt+Shift+v`（只设置）。
-  本镜像的 `clipboard-push.sh` 轮询 X 剪贴板，内容变化时用 xdotool 通过 XTEST 给 scrcpy 窗口补一次
-  `Alt+Shift+v`，等效于自动推送。设 `AUTO_PUSH_CLIPBOARD=0` 可关掉，改回手动按键。
+链路：`浏览器 ↔ KasmVNC ↔ X CLIPBOARD ↔ scrcpy ↔ Android`
+
+- **Android → 浏览器：全自动。** scrcpy 默认开着 `--clipboard-autosync`，设备剪贴板一变就写进 X 的
+  `CLIPBOARD`，KasmVNC 再同步给浏览器。
+- **浏览器 → Android：在画面里按 `Alt+V`。** 这一下会把电脑（= X）剪贴板写进 **Android 的
+  primary clip** 并执行粘贴。
+
+⚠️ scrcpy **3.x** 的快捷键语义和网上很多老文档不一样（见 `app/src/input_manager.c`）：
+
+| 快捷键 | 3.x 实际行为 |
+|---|---|
+| `Alt+V` | 设置**设备剪贴板** + 粘贴 |
+| `Alt+Shift+V` | 把电脑剪贴板当作**按键序列注入**（legacy paste），**完全不碰设备剪贴板** |
+| `Alt+C` / `Alt+X` | 向设备注入 COPY / CUT，再由 autosync 回传到电脑 |
+
+因为没有“只设剪贴板、不粘贴”的快捷键，所以**没法在后台安全地自动推送**（后台自动按 `Alt+V`
+会往用户当前焦点的输入框里乱贴东西）。上游也是有意不提供自动推送的。
+
+浏览器那一段（浏览器 ↔ KasmVNC）依赖浏览器的异步剪贴板 API，需要 **HTTPS（secure context）**
+并允许剪贴板权限；用 `http://<clusterip>:3001` 直连时浏览器会禁用该 API，只能用 KasmVNC 侧边栏的
+剪贴板面板手工贴。
+
+## 已验证（redroid Android 14 arm64）
+
+- scrcpy 3.3.4 客户端 + 同版本 server 正常连上，日志里**没有** `NoSuchMethodException` / `Server exited`。
+- X → Android：容器内 `xclip` 写入 `X2A_…_KLM` → 画面里 `Alt+V` → 设备侧清空输入框后单独 `Ctrl+V`
+  粘出同一串，说明 Android 的 primary clip 确实被改写。
+- Android → X：设备侧输入框里 `Ctrl+A`/`Ctrl+C` → 容器内 `xclip -o -selection clipboard` 立刻读到同一串。
+- 注：redroid 这个 build 的 `ClipboardService` 没实现 shell dump，`adb shell dumpsys clipboard`
+  永远是空输出（`cmd clipboard` 也是 `No shell command implementation`），验证只能靠“粘贴回读”。
 
 ## 看门狗
 

@@ -38,6 +38,17 @@
 #
 # 5) v4l2 / USB(OTG) 两个特性对本场景没用(设备是 TCP 接入), 编译时关掉,
 #    省掉 libusb 运行期依赖。
+#
+# 6) **fluxbox 默认会去调 fbsetbg 设壁纸, 装不到壁纸程序就弹一个 xmessage 窗口挡在桌面上**。
+#    解法: 在 ~/.fluxbox/init 里把 session.screen0.rootCommand 指成 xsetroot
+#    (来自 x11-xserver-utils), 见 start.sh。
+#
+# 7) **scrcpy 3.x 的剪贴板快捷键语义和老版本不一样**(见 app/src/input_manager.c):
+#      MOD+v       = 把电脑剪贴板写进**设备剪贴板**并粘贴  <-- 电脑->Android 唯一的正路
+#      MOD+Shift+v = 把电脑剪贴板当作**按键序列注入**(legacy paste), **不碰设备剪贴板**
+#    所以不存在"只设剪贴板不粘贴"的快捷键, 也就没法在后台安全地自动推送
+#    (自动按 MOD+v 会往当前焦点输入框里乱贴东西)。反方向 Android->电脑 是默认自动的
+#    (--clipboard-autosync)。详见 README。
 
 ARG SCRCPY_VERSION=3.3.4
 # scrcpy-server-v3.3.4 的官方 SHA256(取自 release 的 SHA256SUMS.txt)
@@ -86,7 +97,7 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
       ca-certificates curl tini procps dbus-x11 ssl-cert jq \
-      fluxbox xterm x11-utils x11-apps netpbm \
+      fluxbox xterm x11-utils x11-xserver-utils x11-apps netpbm \
       xdotool xclip \
       fonts-dejavu fonts-noto-cjk \
       adb \
