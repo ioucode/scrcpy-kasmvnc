@@ -1,0 +1,37 @@
+name: build-and-push
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    # 公共 arm64 runner, public repo 免费; 原生 arm64 构建, 不需要 QEMU
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          provenance: false
+          sbom: false
+          tags: |
+            ghcr.io/ioucode/scrcpy-kasmvnc:latest
+            ghcr.io/ioucode/scrcpy-kasmvnc:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
