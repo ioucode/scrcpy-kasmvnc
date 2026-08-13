@@ -3,7 +3,7 @@
 KasmVNC + 原生 scrcpy 的 **linux/arm64** 容器镜像，用来在浏览器里操作 [redroid](https://github.com/remote-android/redroid-doc)（容器化 Android）。
 
 ```
-浏览器 ──HTTP/WS:3001──> KasmVNC(Xvnc :1) ──> fluxbox + scrcpy(SDL) ──adb/TCP──> redroid(Android 14)
+浏览器 ──HTTP/WS:3001──> KasmVNC(Xvnc :1) ──> scrcpy(SDL, 无 WM) ──adb/TCP──> redroid(Android 14)
 ```
 
 镜像：`ghcr.io/ioucode/scrcpy-kasmvnc:<commit-sha>`（每次 push 到 main 由 Actions 的 `ubuntu-24.04-arm` runner 原生构建）。

@@ -12,6 +12,7 @@ set -uo pipefail
 
 export DISPLAY="${DISPLAY:-:1}"
 : "${ADB_SERIAL:=redroid.redroid.svc.cluster.local:5555}"
+: "${SCREEN_GEOMETRY:=720x1280}"
 : "${SCRCPY_MAX_FPS:=30}"
 : "${SCRCPY_VIDEO_BIT_RATE:=4M}"
 : "${SCRCPY_MAX_SIZE:=0}"
@@ -37,7 +38,11 @@ while true; do
   echo "[loop] $(date -Is) launching scrcpy -> ${ADB_SERIAL}"
   # --render-driver=software : Xvnc 没有 GLX, 必须软件渲染
   # --no-audio               : redroid 没有音频设备, 开着只会反复报错并浪费 CPU
-  # --window-borderless      : 配合 fluxbox 的 apps 规则铺满桌面
+  # --window-borderless + 显式 x/y/width/height:
+  #   没有窗口管理器, 所以窗口位置和大小必须自己钉死成整块桌面。这一点很关键 ——
+  #   无 WM 时 X 的焦点是 PointerRoot(键盘发给指针所在窗口), 窗口铺满桌面才能保证
+  #   任何时候按键都进得去 scrcpy(否则指针落在根窗口上, 快捷键全丢)。
+  #   设备分辨率与桌面不等比时 scrcpy 自己会在窗口内加黑边, 不影响操作。
   # 剪贴板: Android -> 电脑 由 --clipboard-autosync 默认开启, 不要加 --no-clipboard-autosync;
   #         电脑 -> Android 由用户在画面里按 Alt+V 触发(scrcpy 3.x 没有自动推送的选项)
   scrcpy \
@@ -46,6 +51,7 @@ while true; do
     --render-driver=software \
     --window-borderless \
     --window-x=0 --window-y=0 \
+    --window-width="${SCREEN_GEOMETRY%x*}" --window-height="${SCREEN_GEOMETRY#*x}" \
     --max-fps="${SCRCPY_MAX_FPS}" \
     --video-bit-rate="${SCRCPY_VIDEO_BIT_RATE}" \
     --max-size="${SCRCPY_MAX_SIZE}" \

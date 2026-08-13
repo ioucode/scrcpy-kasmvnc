@@ -2,7 +2,7 @@
 # 用途: 给 redroid(容器化 Android 14 arm64)提供"浏览器里操作 Android"的入口,
 #       取代 ws-scrcpy —— 后者内置的是 2021 年的 scrcpy server 1.19, 剪贴板在 Android 13+ 上彻底不可用。
 #
-# 架构: 浏览器 --HTTP/WS--> KasmVNC(Xvnc, 端口 3001) --> X11 :1 --> fluxbox + scrcpy(SDL 窗口)
+# 架构: 浏览器 --HTTP/WS--> KasmVNC(Xvnc, 端口 3001) --> X11 :1 --> scrcpy(SDL 窗口, 无 WM)
 #                                                                    |
 #                                                        adb(TCP) --> redroid
 #
@@ -39,9 +39,14 @@
 # 5) v4l2 / USB(OTG) 两个特性对本场景没用(设备是 TCP 接入), 编译时关掉,
 #    省掉 libusb 运行期依赖。
 #
-# 6) **fluxbox 默认会去调 fbsetbg 设壁纸, 装不到壁纸程序就弹一个 xmessage 窗口挡在桌面上**。
-#    解法: 在 ~/.fluxbox/init 里把 session.screen0.rootCommand 指成 xsetroot
-#    (来自 x11-xserver-utils), 见 start.sh。
+# 6) **不装窗口管理器**。一开始照抄 chrome-kasmvnc 用 fluxbox, 踩到两个坑:
+#      a) fluxbox 启动调 fbsetbg 设壁纸, 容器里没壁纸程序 -> 弹 xmessage 窗口压在画面上并抢焦点
+#         (rootCommand / styleOverlay `background: none` 都没拦住);
+#      b) WM 的 reparent/map 与 SDL 的 SDL_RaiseWindow 抢跑, scrcpy 偶发
+#         `X Error of failed request: BadMatch ... X_SetInputFocus`, Xlib 默认处理直接把进程打死。
+#    桌面上只有 scrcpy 一个窗口, 本来就不需要 WM。无 WM 时 Xvnc 的焦点是 PointerRoot,
+#    键盘发给指针所在窗口, 只要把 scrcpy 窗口钉成整块桌面(见 scrcpy-loop.sh 的 --window-*)
+#    键盘和快捷键就一切正常 —— 已实测。
 #
 # 7) **scrcpy 3.x 的剪贴板快捷键语义和老版本不一样**(见 app/src/input_manager.c):
 #      MOD+v       = 把电脑剪贴板写进**设备剪贴板**并粘贴  <-- 电脑->Android 唯一的正路
@@ -97,7 +102,7 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
       ca-certificates curl tini procps dbus-x11 ssl-cert jq \
-      fluxbox xterm x11-utils x11-xserver-utils x11-apps netpbm \
+      x11-utils x11-xserver-utils x11-apps netpbm \
       xdotool xclip \
       fonts-dejavu fonts-noto-cjk \
       adb \

@@ -1,5 +1,5 @@
 #!/bin/bash
-# 容器入口: 起 adb server + 自动 connect, 再起 KasmVNC(Xvnc), 由 xstartup 拉起 fluxbox + scrcpy。
+# 容器入口: 起 adb server + 自动 connect, 再起 KasmVNC(Xvnc), 由 xstartup 拉起 scrcpy(不跑 WM)。
 # 参考自 ioucode/chrome-kasmvnc 的 start.sh(同一套 KasmVNC 用法), 把 Chrome 换成 scrcpy。
 set -uo pipefail
 
@@ -20,10 +20,10 @@ export ADB_SERIAL ADB_CONNECT_INTERVAL SCREEN_GEOMETRY \
 # 坑: **千万别设 ADB_SERVER_SOCKET**。一旦设成 tcp:127.0.0.1:5037, adb 就把它当"远端 server",
 #     `adb start-server` / `adb connect` 都不会再 fork 出本地 daemon, 于是设备永远连不上,
 #     scrcpy-loop 会一直卡在 "waiting for ..."。默认值本来就是本地 5037, 保持不设即可。
-# SDL 在 Xvnc 上没有 GLX, 固定走软件渲染; WM_CLASS 固定成 scrcpy 方便 fluxbox/xdotool 精确匹配
+# SDL 在 Xvnc 上没有 GLX, 固定走软件渲染; WM_CLASS 固定成 scrcpy 方便 xdotool 精确匹配
 export SDL_VIDEODRIVER=x11 SDL_VIDEO_X11_WMCLASS=scrcpy
 
-mkdir -p /config/.vnc /config/.fluxbox /config/.android
+mkdir -p /config/.vnc /config/.android
 
 echo "[start] scrcpy $(scrcpy --version 2>/dev/null | head -1)"
 echo "[start] $(adb version | head -1)"
@@ -72,37 +72,22 @@ encoding:
       height: 2560
 YAML
 
-# fluxbox: 隐藏工具栏, 并强制 scrcpy 窗口无边框满屏
-cat > /config/.fluxbox/apps <<'APPS'
-[app] (class=scrcpy)
-  [Maximized]     {yes}
-  [Deco]          {NONE}
-  [Dimensions]    {100% 100%}
-  [Position]      {0 0}
-[end]
-APPS
-# init: 隐藏工具栏 + 用 xsetroot 画纯色背景。
-# 坑: 不设 rootCommand 的话 fluxbox 会去调 fbsetbg 设壁纸, 找不到壁纸程序就弹一个
-#     xmessage 窗口("fbsetbg: I can't find an app to set the wallpaper with")挡在桌面上,
-#     还会抢焦点, 影响 scrcpy 收快捷键。
-cat > /config/.fluxbox/init <<'FBINIT'
-session.screen0.toolbar.visible:	false
-session.screen0.rootCommand:	xsetroot -solid black
-session.screen0.focusModel:	ClickToFocus
-session.screen0.focusNewWindows:	true
-session.styleOverlay:	/config/.fluxbox/overlay
-FBINIT
-# 光设 rootCommand 还不够: 样式里带 background 时 fluxbox 照样会去调 fbsetbg。
-# 官方做法是在 style overlay 里写 `background: none` 彻底禁掉设壁纸这一步。
-printf 'background: none\n' > /config/.fluxbox/overlay
-
 # ---------------------------------------------------------------- xstartup
+# 注意: **这里故意不跑窗口管理器**。桌面上只有 scrcpy 一个窗口, 且窗口尺寸被强制成桌面尺寸,
+# 不需要 WM。一开始用的是 fluxbox(照抄 chrome-kasmvnc), 结果两个坑:
+#   a) fluxbox 启动时会调 fbsetbg 设壁纸, 容器里没有壁纸程序, 它就弹一个 xmessage 窗口
+#      ("fbsetbg: I can't find an app to set the wallpaper with")压在画面上还抢焦点。
+#      rootCommand / styleOverlay(background: none) 都没能拦住。
+#   b) 更严重: WM 的 reparent/map 与 SDL 的 SDL_RaiseWindow 抢跑, scrcpy 启动时偶发
+#         X Error of failed request: BadMatch ... Major opcode 42 (X_SetInputFocus)
+#      Xlib 默认错误处理直接把 scrcpy 打死(看门狗虽然能重拉, 但画面会闪一下)。
+# 没有 WM 时 Xvnc 的输入焦点是 PointerRoot —— 键盘事件直接发给指针所在的窗口, 而 scrcpy
+# 窗口铺满整个桌面, 所以键盘/快捷键(含 Alt+V 粘贴)照常工作。已实测验证。
 cat > /config/.vnc/xstartup <<'XEOF'
 #!/bin/bash
 # vncserver 会在 :1 上执行本脚本, 环境变量从 start.sh 继承过来。
 export DISPLAY="${DISPLAY:-:1}"
 xsetroot -solid black 2>/dev/null || true
-fluxbox >/config/.vnc/fluxbox.log 2>&1 &
 exec /opt/scrcpy/scrcpy-loop.sh >>/config/.vnc/scrcpy.log 2>&1
 XEOF
 chmod +x /config/.vnc/xstartup
